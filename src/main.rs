@@ -1,4 +1,4 @@
-#![warn(missing_docs)]
+#![deny(missing_docs)]
 //! <fullname>CloudWatch logs forwarder</fullname>
 //! Lambda function that receives log events
 //! from CloudWatch. Tries to find who the invocation
@@ -10,9 +10,12 @@ mod event;
 use event::*;
 mod store;
 
-async fn handle_logs(store: &store::DynamoDBStore, event: LambdaEvent<LogsEvent>) -> Result<(), Error> {
+async fn handle_logs(
+    store: &store::DynamoDBStore,
+    event: LambdaEvent<LogsEvent>,
+) -> Result<(), Error> {
     let payload = event.payload;
-    let function_id = payload.aws_logs.log_group.rsplitn(2, "/").next();
+    let function_id = payload.aws_logs.data.log_group.rsplit('/').next();
 
     // - Find function information in the dynamodbstore
     // - Assume customer role
@@ -37,5 +40,8 @@ async fn main() -> Result<(), Error> {
         .init();
 
     let store = store::get_store().await;
-    run(service_fn(|event: LambdaEvent<LogsEvent>| handle_logs(&store, event))).await
+    run(service_fn(|event: LambdaEvent<LogsEvent>| {
+        handle_logs(&store, event)
+    }))
+    .await
 }

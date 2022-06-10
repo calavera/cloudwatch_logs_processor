@@ -1,8 +1,8 @@
-use tracing::{info, instrument};
+use crate::dynamodb_ext::*;
 use aws_sdk_dynamodb::{model::AttributeValue, Client, Error};
 use serde::Deserialize;
 use std::collections::HashMap;
-use crate::dynamodb_ext::*;
+use tracing::{info, instrument};
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct FunctionInfo {
@@ -62,9 +62,7 @@ impl TryFrom<HashMap<String, AttributeValue>> for FunctionInfo {
     /// This could fail as the DynamoDB item might be missing some fields.
     fn try_from(value: HashMap<String, AttributeValue>) -> Result<Self, Self::Error> {
         Ok(FunctionInfo {
-            id: value
-                .get_s("id")
-                .ok_or("Missing id".to_string())?,
+            id: value.get_s("id").ok_or("Missing id".to_string())?,
             assume_role_arn: value
                 .get_s("assume_role_arn")
                 .ok_or("Missing assume role arn".to_string())?,
