@@ -7,7 +7,8 @@ use tracing::{info, instrument};
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct FunctionInfo {
     pub id: String,
-    pub assume_role_arn: String,
+    pub name: String,
+    pub logs_assume_role_arn: String,
 }
 
 /// DynamoDB store implementation.
@@ -41,10 +42,7 @@ impl DynamoDBStore {
 
 /// Initialize the DynamoDB store.
 #[instrument]
-pub async fn get_store() -> DynamoDBStore {
-    // Get AWS Configuration
-    let config = aws_config::load_from_env().await;
-
+pub async fn get_store(config: &aws_types::SdkConfig) -> DynamoDBStore {
     // Initialize a DynamoDB store
     let table_name = std::env::var("TABLE_NAME").expect("TABLE_NAME must be set");
     info!(
@@ -63,9 +61,10 @@ impl TryFrom<HashMap<String, AttributeValue>> for FunctionInfo {
     fn try_from(value: HashMap<String, AttributeValue>) -> Result<Self, Self::Error> {
         Ok(FunctionInfo {
             id: value.get_s("id").ok_or("Missing id".to_string())?,
-            assume_role_arn: value
-                .get_s("assume_role_arn")
-                .ok_or("Missing assume role arn".to_string())?,
+            name: value.get_s("name").ok_or("Missing name".to_string())?,
+            logs_assume_role_arn: value
+                .get_s("logs_assume_role_arn")
+                .ok_or("Missing logs assume role arn".to_string())?,
         })
     }
 }

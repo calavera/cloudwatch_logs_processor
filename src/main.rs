@@ -3,32 +3,59 @@
 //! Lambda function that receives log events
 //! from CloudWatch. Tries to find who the invocation
 //! belongs to, and sends the event to the owner's account.
+use aws_sdk_sts::Client as StsClient;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 
+mod cloudwatch_logs;
+use cloudwatch_logs::*;
+
 mod dynamodb_ext;
+
+mod error;
+use error::RuntimeError;
+
 mod event;
 use event::*;
+
 mod store;
 
+#[tracing::instrument(skip(client, store, event))]
 async fn handle_logs(
+    client: &StsClient,
     store: &store::DynamoDBStore,
     event: LambdaEvent<LogsEvent>,
-) -> Result<(), Error> {
-    let payload = event.payload;
-    let function_id = payload.aws_logs.data.log_group.rsplit('/').next();
+) -> Result<(), RuntimeError> {
+    let session_id = event.context.request_id;
+    let data = event.payload.aws_logs.data;
+    let log_group = data.log_group;
 
-    // - Find function information in the dynamodbstore
-    // - Assume customer role
-    //        See https://github.com/awslabs/aws-sdk-rust/blob/bd5fa57de41af37d56b56f1dc72604637da0e504/examples/iam/src/bin/iam-getting-started.rs#L191
-    // - Initialize CloudWatch logs client with assumed credentials
-    // - Send payload to to CloudWatch
-    //      - Filter start/stop server logs
-    //      - Find or create log group
-    //      - Find or create log stream
-    //      - Put log events
-    //           See https://docs.rs/aws-sdk-cloudwatchlogs/latest/aws_sdk_cloudwatchlogs/client/struct.Client.html#method.put_log_events
+    let function_id = match log_group.rsplit('/').next() {
+        Some(id) => id,
+        _ => return Err(RuntimeError::MissingFunction(log_group)),
+    };
 
-    Ok(())
+    // TODO(david): Find function information in the dynamodbstore
+    let info = store::FunctionInfo {
+        id: function_id.into(),
+        name: "app-id-brach-name".into(),
+        logs_assume_role_arn: "assume_role_arn".into(),
+    };
+
+    // Initialize CloudWatch logs client with assumed credentials
+    let cw_customer_client =
+        assume_cw_customer_role(client, &session_id, &info.logs_assume_role_arn).await?;
+
+    // replace aws/lambda/... with our own log prefix
+    let new_log_group = format!("aws/amplify/compute/{}", &info.name);
+    create_new_log_group_if_missing(&cw_customer_client, &new_log_group).await?;
+
+    send_events(
+        &cw_customer_client,
+        &new_log_group,
+        &data.log_stream,
+        &data.log_events,
+    )
+    .await
 }
 
 #[tokio::main]
@@ -39,9 +66,14 @@ async fn main() -> Result<(), Error> {
         .without_time()
         .init();
 
-    let store = store::get_store().await;
+    // Get AWS Configuration
+    let config = aws_config::load_from_env().await;
+
+    let sts_client = StsClient::new(&config);
+    let store = store::get_store(&config).await;
+
     run(service_fn(|event: LambdaEvent<LogsEvent>| {
-        handle_logs(&store, event)
+        handle_logs(&sts_client, &store, event)
     }))
     .await
 }
