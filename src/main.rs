@@ -1,8 +1,10 @@
 #![deny(missing_docs)]
-//! <fullname>CloudWatch logs forwarder</fullname>
+//! <fullname>CloudWatch logs processor</fullname>
+//!
 //! Lambda function that receives log events
-//! from CloudWatch. Tries to find who the invocation
+//! from CloudWatch Logs. It tries to find who the invocation
 //! belongs to, and sends the event to the owner's account.
+use aws_sdk_cloudwatchlogs::Client as CwClient;
 use aws_sdk_sts::Client as StsClient;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 
@@ -17,12 +19,17 @@ use error::RuntimeError;
 mod event;
 use event::*;
 
-mod store;
+mod function_info;
 
-#[tracing::instrument(skip(client, store, event))]
+mod dynamodb;
+use dynamodb::DynamoDBClient;
+
+mod sts;
+
+#[tracing::instrument(skip(sts_client, dynamodb_client, event))]
 async fn handle_logs(
-    client: &StsClient,
-    store: &store::DynamoDBStore,
+    sts_client: &StsClient,
+    dynamodb_client: &DynamoDBClient,
     event: LambdaEvent<LogsEvent>,
 ) -> Result<(), RuntimeError> {
     let session_id = event.context.request_id;
@@ -34,23 +41,23 @@ async fn handle_logs(
         _ => return Err(RuntimeError::MissingFunction(log_group)),
     };
 
-    // TODO(david): Find function information in the dynamodbstore
-    let info = store::FunctionInfo {
-        id: function_id.into(),
-        name: "app-id-brach-name".into(),
-        logs_assume_role_arn: "assume_role_arn".into(),
-    };
+    let info = dynamodb_client.get_function_info(function_id).await?;
 
     // Initialize CloudWatch logs client with assumed credentials
-    let cw_customer_client =
-        assume_cw_customer_role(client, &session_id, &info.logs_assume_role_arn).await?;
+    let cw_config = sts::assume_role(
+        sts_client,
+        &session_id,
+        &info.cloudwatch_logs_assume_role_arn,
+    )
+    .await?;
+    let cw_client = CwClient::new(&cw_config);
 
     // replace aws/lambda/... with our own log prefix
     let new_log_group = format!("aws/amplify/compute/{}", &info.name);
-    create_new_log_group_if_missing(&cw_customer_client, &new_log_group).await?;
+    create_new_log_group_if_missing(&cw_client, &new_log_group).await?;
 
     send_events(
-        &cw_customer_client,
+        &cw_client,
         &new_log_group,
         &data.log_stream,
         &data.log_events,
@@ -68,12 +75,19 @@ async fn main() -> Result<(), Error> {
 
     // Get AWS Configuration
     let config = aws_config::load_from_env().await;
-
     let sts_client = StsClient::new(&config);
-    let store = store::get_store(&config).await;
+
+    let dynamodb_table =
+        std::env::var("DYNAMODB_TABLE").expect("missing environment variable DYNAMODB_TABLE");
+    let dynamodb_assume_role = std::env::var("DYNAMODB_ASSUME_ROLE")
+        .expect("missing environment variable DYNAMODB_ASSUME_ROLE");
+
+    let session_id = format!("cloudwatch_logs_processor_session_{}", uuid::Uuid::new_v4());
+    let dynamodb_config = sts::assume_role(&sts_client, &session_id, &dynamodb_assume_role).await?;
+    let dynamodb_client = DynamoDBClient::new(&dynamodb_config, &dynamodb_table).await;
 
     run(service_fn(|event: LambdaEvent<LogsEvent>| {
-        handle_logs(&sts_client, &store, event)
+        handle_logs(&sts_client, &dynamodb_client, event)
     }))
     .await
 }

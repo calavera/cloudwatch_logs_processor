@@ -1,15 +1,13 @@
-use aws_sdk_cloudwatchlogs::{Client as CwClient, Error};
-use aws_sdk_iam::Credentials as IamCredentials;
-use aws_sdk_sts::Client as StsClient;
+use aws_sdk_cloudwatchlogs::{Client, Error};
 
 use crate::{error::RuntimeError, event::LogEntry};
 
-// Find a log group in the customer account that matches the
-// function's log group.
-// Create the group if it doesn't exist.
+/// Find a log group in the customer account that matches the
+/// function's log group.
+/// Create the group if it doesn't exist.
 #[tracing::instrument(skip(client))]
 pub async fn create_new_log_group_if_missing(
-    client: &CwClient,
+    client: &Client,
     log_group: &str,
 ) -> Result<(), RuntimeError> {
     let res = client
@@ -48,13 +46,13 @@ pub async fn create_new_log_group_if_missing(
     Ok(())
 }
 
-// Find the next upload sequence token for the log stream.
-// If the log stream doesn't exist, this function creates it.
-// For new log streams, this function returns None as the sequence token,
-// which is what the SDK expects.
+/// Find the next upload sequence token for the log stream.
+/// If the log stream doesn't exist, this function creates it.
+/// For new log streams, this function returns None as the sequence token,
+/// which is what the SDK expects.
 #[tracing::instrument(skip(client))]
 async fn find_sequence_token(
-    client: &CwClient,
+    client: &Client,
     log_group: &str,
     log_stream: &str,
 ) -> Result<Option<String>, RuntimeError> {
@@ -96,56 +94,10 @@ async fn find_sequence_token(
     Ok(None)
 }
 
-// Assume the role of a customer to write in the CloudWatch logs.
-//
-// TODO(david): is the assume_role_arn considered private information that
-// we cannot have in our service logs? if it's private, add it to the `skip` attribute 
-// in the instrument macro below.
-#[tracing::instrument(skip(client))]
-pub async fn assume_cw_customer_role(
-    client: &StsClient,
-    session_id: &str,
-    assume_role_arn: &str,
-) -> Result<aws_sdk_cloudwatchlogs::Client, RuntimeError> {
-    tracing::info!("assuming cloudwatch logs customer role");
-
-    let assumed_role = client
-        .assume_role()
-        .role_arn(assume_role_arn)
-        .role_session_name(session_id)
-        .send()
-        .await
-        .map_err(RuntimeError::AssumeRoleFailure)?;
-
-    let credentials = match assumed_role.credentials {
-        Some(creds) => creds,
-        None => return Err(RuntimeError::MissingCredentials),
-    };
-
-    let (access_key_id, secret_access_key) =
-        match (credentials.access_key_id(), credentials.secret_access_key()) {
-            (Some(id), Some(key)) => (id, key),
-            _ => return Err(RuntimeError::MissingCredentials),
-        };
-
-    let assumed_credentials = IamCredentials::from_keys(
-        access_key_id,
-        secret_access_key,
-        credentials.session_token.clone(),
-    );
-
-    let succeed_config = aws_config::from_env()
-        .credentials_provider(assumed_credentials)
-        .load()
-        .await;
-
-    Ok(CwClient::new(&succeed_config))
-}
-
-// Send the log batch to the customer account
+/// Send the log batch to the customer account
 #[tracing::instrument(skip(client, log_events))]
 pub async fn send_events(
-    client: &CwClient,
+    client: &Client,
     log_group: &str,
     log_stream: &str,
     log_events: &Vec<LogEntry>,
