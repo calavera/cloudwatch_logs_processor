@@ -1,5 +1,8 @@
-use serde::{de::Error, Deserialize, Deserializer};
-use std::io::BufReader;
+use serde::{
+    de::{Error, MapAccess, Visitor},
+    Deserialize, Deserializer,
+};
+use std::{fmt, io::BufReader};
 
 /// `LogsEvent` represents the raw event sent by CloudWatch
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -10,9 +13,8 @@ pub struct LogsEvent {
 }
 
 /// `AwsLogs` is an unmarshaled, ungzipped, CloudWatch logs event
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AwsLogs {
-    #[serde(deserialize_with = "from_base64")]
     pub data: LogData,
 }
 
@@ -36,16 +38,49 @@ pub struct LogEntry {
     pub message: String,
 }
 
-fn from_base64<'d, D>(deserializer: D) -> Result<LogData, D::Error>
-where
-    D: Deserializer<'d>,
-{
-    let bytes = String::deserialize(deserializer)
-        .and_then(|string| base64::decode(&string).map_err(D::Error::custom))?;
+impl<'de> Deserialize<'de> for AwsLogs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct AwsLogsVisitor;
 
-    let bytes = flate2::read::GzDecoder::new(&bytes[..]);
-    let mut de = serde_json::Deserializer::from_reader(BufReader::new(bytes));
-    LogData::deserialize(&mut de).map_err(D::Error::custom)
+        impl<'de> Visitor<'de> for AwsLogsVisitor {
+            type Value = AwsLogs;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a base64 gzipped string")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<AwsLogs, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut data = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        "data" => {
+                            let bytes = map.next_value::<String>().and_then(|string| {
+                                base64::decode(&string).map_err(Error::custom)
+                            })?;
+
+                            let bytes = flate2::read::GzDecoder::new(&bytes[..]);
+                            let mut de =
+                                serde_json::Deserializer::from_reader(BufReader::new(bytes));
+                            data = Some(LogData::deserialize(&mut de).map_err(Error::custom)?);
+                        }
+                        _ => return Err(Error::unknown_field(key, FIELDS)),
+                    }
+                }
+
+                let data = data.ok_or_else(|| Error::missing_field("data"))?;
+                Ok(AwsLogs { data })
+            }
+        }
+
+        const FIELDS: &'static [&'static str] = &["data"];
+        deserializer.deserialize_struct("AwsLogs", FIELDS, AwsLogsVisitor)
+    }
 }
 
 #[cfg(test)]
