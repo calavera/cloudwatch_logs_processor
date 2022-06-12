@@ -59,3 +59,48 @@ impl TryFrom<HashMap<String, AttributeValue>> for FunctionInfo {
         })
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test_util::*;
+    use aws_sdk_dynamodb::{Client, Config};
+    use aws_smithy_client::{erase::DynConnector, test_connection::TestConnection};
+    use aws_smithy_http::body::SdkBody;
+
+    #[tokio::test]
+    async fn test_get_function_info() -> Result<(), RuntimeError> {
+        // GIVEN a DynamoDBClient with one item
+        let conn = TestConnection::new(vec![(
+            get_request_builder("dynamodb")
+                .header("content-type", "application/x-amz-json-1.0")
+                .header("x-amz-target", "DynamoDB_20120810.GetItem")
+                .body(SdkBody::from(r#"{"TableName": "test", "Key": {"id": {"S": "1"}}}"#))
+                .unwrap(),
+            http::Response::builder()
+                .status(200)
+                .body(SdkBody::from(r#"{"Item": {"id": {"S": "1"}, "name": {"S": "app-id-1-branch-2"}, "cloudwatch_logs_assume_role_arn": {"S": "arn"}}}"#))
+                .unwrap(),
+        )]);
+        let config = Config::new(&get_mock_config().await);
+        let inner = Client::from_conf_conn(config, DynConnector::new(conn.clone()));
+
+        let store = DynamoDBClient {
+            inner,
+            table: "test".to_string(),
+        };
+
+        // WHEN getting an item
+        let function = store.get_function_info("1").await?;
+
+        // THEN the response has the correct values
+        assert_eq!("1", function.id);
+        assert_eq!("app-id-1-branch-2", function.name);
+        assert_eq!("arn", function.cloudwatch_logs_assume_role_arn);
+
+        // AND the request matches the expected request
+        conn.assert_requests_match(&vec![]);
+
+        Ok(())
+    }
+}

@@ -6,7 +6,7 @@
 //! belongs to, and sends the event to the owner's account.
 use aws_sdk_cloudwatchlogs::Client as CwClient;
 use aws_sdk_sts::Client as StsClient;
-use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use lambda_runtime::LambdaEvent;
 
 mod cloudwatch_logs;
 use cloudwatch_logs::*;
@@ -14,20 +14,26 @@ use cloudwatch_logs::*;
 mod dynamodb_ext;
 
 mod error;
-use error::RuntimeError;
+pub use error::RuntimeError;
 
 mod event;
-use event::*;
+pub use event::LogsEvent;
 
 mod function_info;
 
 mod dynamodb;
-use dynamodb::DynamoDBClient;
+pub use dynamodb::DynamoDBClient;
 
-mod sts;
+/// `sts` includes helpers to work with AWS STS
+pub mod sts;
 
+#[cfg(test)]
+mod test_util;
+
+/// `handle_logs` is the Lambda function entry point
+/// that receives the events from CloudWatch Logs
 #[tracing::instrument(skip(sts_client, dynamodb_client, event))]
-async fn handle_logs(
+pub async fn handle_logs(
     sts_client: &StsClient,
     dynamodb_client: &DynamoDBClient,
     event: LambdaEvent<LogsEvent>,
@@ -62,32 +68,5 @@ async fn handle_logs(
         &data.log_stream,
         &data.log_events,
     )
-    .await
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        // disabling time is handy because CloudWatch will add the ingestion time.
-        .without_time()
-        .init();
-
-    // Get AWS Configuration
-    let config = aws_config::load_from_env().await;
-    let sts_client = StsClient::new(&config);
-
-    let dynamodb_table =
-        std::env::var("DYNAMODB_TABLE").expect("missing environment variable DYNAMODB_TABLE");
-    let dynamodb_assume_role = std::env::var("DYNAMODB_ASSUME_ROLE")
-        .expect("missing environment variable DYNAMODB_ASSUME_ROLE");
-
-    let session_id = format!("cloudwatch_logs_processor_session_{}", uuid::Uuid::new_v4());
-    let dynamodb_config = sts::assume_role(&sts_client, &session_id, &dynamodb_assume_role).await?;
-    let dynamodb_client = DynamoDBClient::new(&dynamodb_config, &dynamodb_table).await;
-
-    run(service_fn(|event: LambdaEvent<LogsEvent>| {
-        handle_logs(&sts_client, &dynamodb_client, event)
-    }))
     .await
 }

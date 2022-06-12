@@ -7,7 +7,7 @@ use std::{fmt, io::BufReader};
 /// `LogsEvent` represents the raw event sent by CloudWatch
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct LogsEvent {
-    // aws_logs is gzipped and base64 encoded, it needs a custom deserializer
+    /// `aws_logs` is gzipped and base64 encoded, it needs a custom deserializer
     #[serde(rename = "awslogs")]
     pub aws_logs: AwsLogs,
 }
@@ -15,6 +15,7 @@ pub struct LogsEvent {
 /// `AwsLogs` is an unmarshaled, ungzipped, CloudWatch logs event
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AwsLogs {
+    /// `data` is the log data after is decompressed
     pub data: LogData,
 }
 
@@ -22,19 +23,28 @@ pub struct AwsLogs {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LogData {
+    /// Owner of the log event
     pub owner: String,
+    /// Log group where the event was published
     pub log_group: String,
+    /// Log stream where the event was published
     pub log_stream: String,
+    /// Filters applied to the event
     pub subscription_filters: Vec<String>,
+    /// Type of event
     pub message_type: String,
+    /// Entries in the log batch
     pub log_events: Vec<LogEntry>,
 }
 
 /// `LogEntry` represents a log entry from cloudwatch logs
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct LogEntry {
+    /// Unique id for the entry
     pub id: String,
+    /// Time when the event was published
     pub timestamp: i64,
+    /// Message published in the application log
     pub message: String,
 }
 
@@ -78,7 +88,7 @@ impl<'de> Deserialize<'de> for AwsLogs {
             }
         }
 
-        const FIELDS: &'static [&'static str] = &["data"];
+        const FIELDS: &[&str] = &["data"];
         deserializer.deserialize_struct("AwsLogs", FIELDS, AwsLogsVisitor)
     }
 }

@@ -28,3 +28,13 @@ tokio = { version = "1", features = ["macros"] }
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 uuid = { version = "1.1.2", features = ["v4"] }
+
+[dev-dependencies]
+aws-smithy-client = { version = "0.43.0", features = ["test-util"]  }
+aws-smithy-http = "0.43.0"
+http = "0.2.8"
+
+[[bin]]
+name = "cloudwatch_log_processor"
+path = "src/bin/main.rs"
+test = false
